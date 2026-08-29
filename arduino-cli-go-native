@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# Bash Script Implementation: arduino-cli-go-native
+#
+# Version   : 1.2.0
+#
+# Purpose   : Install arduino-cli and all required tools for arm64 architecture
+#             on a Mac.  Xcode CommandLineTools and Homebrew are prerequisites.
+#
+# Synopsis  :     arduino-cli-go-native [<flags>]
+#             The usual flags (-h or --help, -V or --Version) are available.  In
+#             addition, the flag --coreUpgrade will only redo the symbolic links
+#             of the tools to the brew-installed ones if the brew tools were
+#             already installed properly, which may become necessary after an
+#             Arduino core upgrade using arduino-cli.
+#
+# Comments  : This script will wipe a previous installation of the Arduino
+#             software and install a new version of arduino-cli without IDE for
+#             the boards Uno, Leonardo, Pro, Mini, Mega, MKR Zero, Nano, and Due
+#             using exclusively homebrew installations of arm64 tools instead of
+#             the x86_64 ones provided by Arduino.
+#             HiFive1 is intentionally NOT covered here. Its Arduino board
+#             package (from SiFive) is a stale, pre-Apple-Silicon third-party
+#             index with an x86_64-only bundled toolchain on infrastructure of
+#             uncertain status. It needs separate, manual handling if required.
+#
+# Known Bugs: None
+#
+# Author(s) : W. Ekkehard Blanz, <Ekkehard.Blanz@gmail.com>, (C) 2026
+#
+# Copyright : See LICENSE file that comes with this distribution
+#
+
+# File history:
+#
+#     Date          | Author         | Modification
+#  -----------------+----------------+------------------------------------------
+#   Thu Aug 27 2026 | Ekkehard Blanz | created with some input from Claude
+#   Thu Aug 27 2026 | Claude         | fixed checkArchitecture;
+#                   |                | fixed avrdude typo (was "acrdude"); added
+#                   |                | missing osx-cross/avr tap; simplified the
+#                   |                | fragile relink test in the symlink loop;
+#                   |                | corrected HiFive claim in Comments
+#   Fri Aug 28 2026 | Ekkehard Blanz | added check for Mac OS (Darwin)
+#                   |                |
+
+
+printHeaderSection()
+{
+    # @brief Print a given header section to stdout.
+    # @param Name of header section (Version, Purpose, ...)
+    # @return the function always returns 0
+    local line
+    local -i printLine=0
+    exec 3< "$0"
+    while read line <&3 ; do
+        if [[ -n "$line" ]]; then
+            if [[ ${line:0:1} == \# ]]; then
+                line=${line:1}
+                if [[ "$line" = [[:space:]]*"$1"[[:space:]:]* ]]; then
+                    printLine=1
+                fi
+                if [ "$printLine" -eq 1 ]; then
+                    if [[ -z "$line" ]]; then break; fi
+                    printf "%s\n" "$line"
+                fi
+            fi
+        fi
+    done
+    return 0
+}
+
+checkArchitecture()
+{
+    # @brief check whether a given binary is for arm64 architecture
+    # @param name of brew binary (may itself be a symlink into the Cellar)
+    # @return 0 if it is for arm64 and 1 if not
+    if [[ -z "$1" || ! -e "$1" ]]; then
+        printf "\nrequested binary %s does not exist\n\n" "${1:-<empty>}"
+        return 1
+    fi
+    # -L is required: brew's top-level bin/ entries are symlinks into the
+    # Cellar, and plain `file` reports "symbolic link to ..." rather than
+    # dereferencing to the actual Mach-O architecture.
+    local probe=$(file -L "$1" | awk '{print $NF}')
+    if [[ "$probe" != "arm64" ]]; then
+        printf "\n%s is for wrong architecture: %s\n\n" "$1" "$probe"
+        return 1
+    fi
+    return 0
+}
+
+# "main" part of the script
+
+declare -i upgradeOnly=0
+declare -i rc=0
+declare d
+declare f
+
+if [[ $OSTYPE != "darwin"* ]]; then
+    printf "\nSorry - this script only works on a Mac\n\n"
+    exit 1
+fi
+
+if [[ "$#" > "1" ]]; then
+    printf "\nError: %s only takes at most one flag and no arguments\n\n" \
+           ${0##*/}
+    exit 1
+elif [[ "$#" == "1" ]]; then
+    case "$1" in
+    -h | --help )
+        printf "\n%s:\n\n" ${0##*/}
+        printHeaderSection Version
+        printf "\n"
+        printHeaderSection Purpose
+        printf "\n"
+        printHeaderSection Synopsis
+        printf "\n"
+        printHeaderSection Comments
+        printf "\n"
+        printHeaderSection Copyright
+        printf "\n\n"
+        exit 0
+        ;;
+
+    -V | --Version )
+        printf "\n%s:\n\n" ${0##*/}
+        printHeaderSection Version
+        printf "\n"
+        printHeaderSection Copyright
+        printf "\n"
+        printHeaderSection "Author(s)"
+        printf "\n\n"
+        exit 0
+        ;;
+
+    --coreUpgrade )
+        # sloppy heuristic only checks bossac
+        # but if that's not there, the installation is definitely broken
+        # we take our chances if it is there an others are missing...
+        checkArchitecture "$(which bossac 2>/dev/null)"
+        rc=$?
+        if [[ "$rc" == "1" ]]; then
+            printf "\nError: Your %s installation is broken.\n" ${0##*/}
+            printf "Please run again without flag to start over.\n\n"
+            exit 1
+        fi
+        upgradeOnly=1
+        ;;
+
+    -* )
+        printf "\nError: Wrong flag given: %s\n\n" "$1"
+        exit 1
+        ;;
+
+    * )
+        printf "\nError: Wrong argument given: %s\n\n" "$1"
+        exit 1
+        ;;
+
+    esac
+fi
+
+# Make sure a native Homebrew is on PATH even if this script is invoked in a
+# context where shell rc files weren't sourced.
+if [[ -x $(which brew) ]]; then
+    eval "$(brew shellenv)"
+else
+    printf "\nError: This script requires homebrew to be installed\n\n"
+    exit 1
+fi
+
+BREW=$(brew --prefix 2> /dev/null)
+if [[ "$BREW" != "/opt/homebrew" ]]; then
+    printf "\nError: Brew itself must be for the arm64 architecture\n\n"
+    exit 1
+fi
+
+if [[ "$upgradeOnly" == 0 ]]; then
+    # first install our arm64 tools via brew
+    brew tap osx-cross/avr
+
+    brew install avr-gcc
+    checkArchitecture "$BREW/bin/avr-gcc" || exit 1
+
+    brew install arm-none-eabi-gcc
+    checkArchitecture "$BREW/bin/arm-none-eabi-gcc" || exit 1
+
+    brew install avrdude
+    checkArchitecture "$BREW/bin/avrdude" || exit 1
+
+    brew install bossa
+    checkArchitecture "$BREW/bin/bossac" || exit 1
+
+    brew install arduino-cli
+    checkArchitecture "$BREW/bin/arduino-cli" || exit 1
+
+    # next, first get rid of the old Arduino installation
+    rm -rf ~/Library/Arduino15
+    # and then re-install the Arduino tools with the WRONG architecture
+    arduino-cli config init
+    arduino-cli core update-index
+    # Uno, Leonardo, Pro, Mini, Mega, Nano:
+    arduino-cli core install arduino:avr || exit 1
+    # Due:
+    arduino-cli core install arduino:sam || exit 1
+    # MKR Zero:
+    arduino-cli core install arduino:samd || exit 1
+fi
+
+# now replace the Arduino-installed binaries with symlinks to the arm64 ones
+# from brew
+
+# --- AVR (Uno, Leonardo, Pro, Mini, Mega, Nano via arduino:avr) ---
+# --- ARM (Due via arduino:sam, MKR Zero via arduino:samd) ---
+for d in ~/Library/Arduino15/packages/arduino/tools/avr-gcc/*/bin \
+         ~/Library/Arduino15/packages/arduino/tools/arm-none-eabi-gcc/*/bin; do
+    [ -d "$d" ] || continue
+    for f in "$d"/*; do
+        name=$(basename "$f")
+        # ln -sf is already idempotent/unconditional, so no need to check
+        # whether an existing link is already "correct" first.  But we do need
+        # to check whether the binary exists in brew (not everything is there)
+        [ -e "$BREW/bin/$name" ] && ln -sf "$BREW/bin/$name" "$f"
+    done
+done
+
+for d in ~/Library/Arduino15/packages/arduino/tools/avrdude/*; do
+    [ -d "$d" ] || continue
+    ln -sf "$BREW/bin/avrdude" "$d/bin/avrdude"
+    ln -sf "$BREW/etc/avrdude.conf" "$d/etc/avrdude.conf"
+done
+
+for d in ~/Library/Arduino15/packages/arduino/tools/bossac/*; do
+    [ -d "$d" ] || continue
+    ln -sf "$BREW/bin/bossac" "$d/bossac"
+done
+
+printf "\nDone. Verify with e.g.:\n"
+printf "\tarduino-cli compile --fqbn arduino:avr:uno --verbose <sketch>\n\n"
+
+exit 0
