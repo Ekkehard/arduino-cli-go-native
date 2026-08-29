@@ -76,11 +76,7 @@ Flags:
 |---|---|
 | `-h`, `--help` | Show usage info |
 | `-V`, `--Version` | Show script version |
-| `--coreUpgrade` | Skip the brew installs and `core install` steps; only re-run
- the symlink swap. Use this after you've manually run `arduino-cli core 
- upgrade`, which can pull in a new toolchain version (and therefore a fresh set
- of x86_64 binaries) under a new version-numbered folder. **This has not been
- tested yet**|
+| `--coreUpgrade` | Skip the brew installs and `core install` steps; only re-run  the symlink swap. Use this after you've manually run `arduino-cli core  upgrade`, which can pull in a new toolchain version (and therefore a fresh set  of x86_64 binaries) under a new version-numbered folder. **This has not been tested yet**|
 
 Verify it worked:
 
